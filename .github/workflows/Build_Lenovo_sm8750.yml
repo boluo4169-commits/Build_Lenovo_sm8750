@@ -100,7 +100,7 @@ jobs:
               ;;
             "6.6.89")
               echo "os_patch_level=2025-06" >> $GITHUB_ENV
-              echo "releases=ColorOS_16_400_OPD_Boot" >> $GITHUB_ENV
+              echo "releases=c16v17.6" >> $GITHUB_ENV
               ;;
             "6.6.102")
               echo "os_patch_level=2025-10" >> $GITHUB_ENV
@@ -806,7 +806,7 @@ jobs:
           rm -f boot_avb_tool.tar.gz && \
           cp ./common/out/arch/arm64/boot/Image ./boot_avb_tool/AOSP-Testkey-BootSigner-main/kernel
           cd boot_avb_tool/AOSP-Testkey-BootSigner-main && \
-          curl -L -o boot.img https://github.com/showdo/AOSP-Testkey-BootSigner/releases/download/${{ env.releases }}/boot.img
+          curl -L -o boot.img https://github.com/boluo4169-commits/AOSP-Testkey-BootSigner/releases/download/${{ env.releases }}/boot.img
           chmod +x ./tools/magiskboot
           ./tools/magiskboot repack boot.img
           rm -f ./boot.img kernel
