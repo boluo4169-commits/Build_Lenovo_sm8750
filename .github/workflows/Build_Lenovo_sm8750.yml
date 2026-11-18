@@ -17,6 +17,12 @@ on:
         default: '6.6.89'
         
       custom_kernel_suffix:
+
+      - name: Apply Unicode bypass patch
+        run: |
+          cd kernel_workspace/common
+          wget -q "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/unicode_bypass_fix_6.1+.patch"
+          patch -p1 < "unicode_bypass_fix_6.1+.patch" || git apply -p1 < "unicode_bypass_fix_6.1+.patch" || echo "unicode patch skipped"
         description: "✏️ 自定义内核名称 (留空默认官核名称)"
         required: false
         default: ''
