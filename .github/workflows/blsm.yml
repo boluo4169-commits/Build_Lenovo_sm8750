@@ -1,0 +1,945 @@
+name: Build_Lenovo_sm8750
+permissions:
+  contents: read
+  actions: write
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: "📝请选择要编译的版本（仅在不勾选上方选项时生效）"
+        required: false
+        type: choice
+        options:
+          - '6.6.56'
+          - '6.6.89'
+          - '6.6.102'
+          - '6.6.118'
+        default: '6.6.89'
+        
+      custom_kernel_suffix:
+        description: "✏️ 自定义内核名称 (留空默认官核名称)"
+        required: false
+        default: ''
+      
+      custom_kernel_time:
+        description: "⏰ 自定义构建时间 (留空默认官核时间)"
+        required: false
+        default: ''
+
+      enable_bbg:
+        description: "开启BBG基带守护"
+        required: false
+        default: false
+        type: boolean
+
+      enable_ReKernel:
+        description: "启用Re-Kernel支持"
+        required: false
+        default: false
+        type: boolean
+      
+      enable_Adios:
+        description: "启用ADIOS IO调度器支持"
+        required: true
+        default: true
+        type: boolean
+
+      enable_droidspaces:
+        description: "Droidspaces 容器支持（推荐678槽位）"
+        required: true
+        default: "678"
+        type: choice
+        options:
+          - "off"
+          - "678"
+          - "123"
+          - "345"
+
+      enable_droidspaces_ntsync:
+        description: "启用 Droidspaces 容器 NTSync 支持（需启用 Droidspaces）"
+        required: false
+        default: true
+        type: boolean
+
+      enable_susfs:
+        description: "启用SUSFS"
+        required: true
+        default: true
+        type: boolean
+
+      enable_signed:
+        description: "使用AOSP密钥签名boot"
+        required: false
+        default: true
+        type: boolean
+
+      
+       
+jobs:
+  build:
+    name: Build_${{ github.event.inputs.kernel_version }}
+    runs-on: ubuntu-24.04
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      KERNEL_VERSION: ${{ github.event.inputs.kernel_version }}
+      CUSTOM_KERNEL_SUFFIX: ${{ github.event.inputs.custom_kernel_suffix }}
+      CUSTOM_KERNEL_TIME: ${{ github.event.inputs.custom_kernel_time }}
+      ENABLE_REKERNEL: ${{ github.event.inputs.enable_ReKernel }}
+      ENABLE_ADIOS: ${{ github.event.inputs.enable_Adios }}
+      ENABLE_DROIDSPACES: ${{ github.event.inputs.enable_droidspaces }}
+      ENABLE_DROIDSPACES_NTSYNC: ${{ github.event.inputs.enable_droidspaces_ntsync }}
+      ENABLE_BBG: ${{ github.event.inputs.enable_bbg }}
+      ENABLE_SUSFS: ${{ github.event.inputs.enable_susfs }}
+      ENABLE_SIGNED: ${{ github.event.inputs.enable_signed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: ⚙️ Set Kernel version config(设置对应内核版本配置文件)
+        run: |
+          echo "KERNEL_TIME=${{ env.CUSTOM_KERNEL_TIME }}" >> $GITHUB_ENV
+          case "${{ env.KERNEL_VERSION }}" in
+            "6.6.56")
+              echo "os_patch_level=2024-11" >> $GITHUB_ENV
+              echo "releases=TB322FC_1.1.11.120" >> $GITHUB_ENV
+              ;;
+            "6.6.89")
+              echo "os_patch_level=2025-06" >> $GITHUB_ENV
+              echo "releases=ColorOS_16_400_OPD_Boot" >> $GITHUB_ENV
+              ;;
+            "6.6.102")
+              echo "os_patch_level=2025-10" >> $GITHUB_ENV
+              echo "releases=TB322FC_1.5.10.096" >> $GITHUB_ENV
+              ;;
+            "6.6.118")
+              echo "os_patch_level=2026-01" >> $GITHUB_ENV
+              echo "releases=TB322_ZUXOS_1.5.10.183" >> $GITHUB_ENV
+              ;;
+          esac
+           if [ -z "${{ env.CUSTOM_KERNEL_SUFFIX }}" ]; then
+            case "${{ env.KERNEL_VERSION }}" in
+              "6.6.56")
+                DEFAULT_SUFFIX='-android15-8-g38447e018c92-ab12829524-4k'
+                ;;
+              "6.6.89")
+                DEFAULT_SUFFIX='-android15-8-g14220ae4ce65-ab13680582-4k'
+                ;;
+              "6.6.102")
+                DEFAULT_SUFFIX='-android15-8-g06bc416365ef-ab14559830-4k'
+                ;;
+              "6.6.118")
+                DEFAULT_SUFFIX='-android15-8-g350f378eb496-ab14943902-4k'
+                ;;
+            esac
+            echo "DEFAULT_SUFFIX=$DEFAULT_SUFFIX" >> $GITHUB_ENV
+            echo "使用原官核名称：$DEFAULT_SUFFIX"
+          else
+            echo "使用自定义名称: ${{ env.CUSTOM_KERNEL_SUFFIX }}"
+            echo "DEFAULT_SUFFIX=${{ env.CUSTOM_KERNEL_SUFFIX }}" >> $GITHUB_ENV
+          fi
+          if [ -z "${{ env.CUSTOM_KERNEL_TIME }}" ]; then
+            case "${{ env.KERNEL_VERSION }}" in
+              6.6.56)
+                KERNEL_TIME='Thu Dec 19 17:58:46 UTC 2024'
+                ;;
+              6.6.89)
+                KERNEL_TIME='Mon Jun 23 07:30:57 UTC 2025'
+                ;;
+              6.6.102)
+                KERNEL_TIME='Tue Dec 9 15:43:22 UTC 2025'
+                ;;
+              6.6.118)
+                KERNEL_TIME='Thu Feb 26 02:40:50 UTC 2026'
+                ;;
+            esac
+            echo "KERNEL_TIME=$KERNEL_TIME" >> $GITHUB_ENV
+            echo "使用官核时间：$KERNEL_TIME"
+          else
+            echo "使用自定义构建时间: ${{ env.CUSTOM_KERNEL_TIME }}"
+            echo "KERNEL_TIME=${{ env.CUSTOM_KERNEL_TIME }}" >> $GITHUB_ENV
+          fi
+
+      - name: 🛠 Install dependencies and Initialize repo and sync （安装环境依赖+初始化源码仓库及工具链）
+        run: |
+          rm -rf kernel_workspace
+          mkdir kernel_workspace
+          cd kernel_workspace
+          
+          sudo apt-mark hold firefox &&
+          sudo apt-mark hold libc-bin &&
+          sudo apt purge man-db &&
+          sudo rm -rf /var/lib/man-db/auto-update &&
+          sudo apt update &&
+          sudo apt-get install -y --no-install-recommends binutils python-is-python3 libssl-dev libelf-dev dos2unix p7zip-full zstd &
+          wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/lib/ccache-x86-64 -O ccache &&
+          sudo cp -f ./ccache /usr/bin/ccache &&
+          sudo chmod +x /usr/bin/ccache &&
+          rm -f ./ccache &
+          echo "正在克隆源码仓库..."
+          aria2c -s16 -x16 -k1M "https://github.com/showdo/Build_Lenovo_sm8750/releases/download/common/${{ env.os_patch_level }}.tar.gz" -o common.tar.gz && \
+          mkdir -p common && \
+          tar -xzf common.tar.gz -C common && \
+          rm -f common.tar.gz &
+
+          
+          echo "正在克隆llvm-clang18工具链..." &&
+          mkdir -p clang18 &&
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/clang-r510928.zip -o clang.zip &&
+          unzip -q clang.zip -d clang18 &&
+          rm -rf clang.zip &
+          
+          echo "正在克隆构建工具..." &&
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/build-tools.zip -o build-tools.zip &&
+          unzip -q build-tools.zip &&
+          rm -rf build-tools.zip &
+          
+          wait
+          echo "所有源码及llvm-Clang18工具链初始化完成！"
+          echo "正在去除 ABI 保护 & 去除 dirty 后缀..."
+          rm common/android/abi_gki_protected_exports_* || true
+          # if [[ "${{ env.KERNEL_VERSION }}" != "6.6.102" ]]; then
+            for f in common/scripts/setlocalversion; do
+              sed -i 's/ -dirty//g' "$f"
+              sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$f"
+            done
+          # fi
+
+      - name: 🛠 Set ccache DIR(配置ccache目录)
+        run: |
+          echo "CCACHE_DIR=$HOME/.ccache_${{ env.KERNEL_VERSION }}" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=10G" >> $GITHUB_ENV
+          # 根据影响源码的功能开关生成缓存变体后缀，避免不同变体互相污染
+          CACHE_VARIANT=""
+          if [ "${{ env.ENABLE_DROIDSPACES }}" = "true" ]; then
+            CACHE_VARIANT="${CACHE_VARIANT}-ds"
+          fi
+          echo "CACHE_VARIANT=$CACHE_VARIANT" >> $GITHUB_ENV
+          echo "当前构建内核：${{ env.KERNEL_VERSION }}，缓存变体：${CACHE_VARIANT:-(无)}"
+          echo "当前磁盘空间："
+          df -h
+
+      - name: 📥 Restore ccache (载入当前机型的ccache缓存)
+        id: ccache-restore
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.KERNEL_VERSION }}${{ env.CACHE_VARIANT }}-latest
+          restore-keys: |
+            ccache-${{ env.KERNEL_VERSION }}${{ env.CACHE_VARIANT }}-
+            ccache-${{ env.KERNEL_VERSION }}-
+
+      - name: 🔎 Find public ccache in releases (查找公共缓存)
+        id: public-ccache
+        if: ${{ steps.ccache-restore.outputs.cache-matched-key == '' }}
+        uses: actions/github-script@v9
+        env:
+          PUBLIC_CACHE_REPO: ${{ vars.PUBLIC_CACHE_REPO }}
+          PUBLIC_CACHE_TAG: ${{ vars.PUBLIC_CACHE_TAG }}
+          KERNEL_VERSION: ${{ env.KERNEL_VERSION }}
+          CACHE_VARIANT: ${{ env.CACHE_VARIANT }}
+        with:
+          script: |
+            const repoName = process.env.PUBLIC_CACHE_REPO || 'showdo/Public_Ccache';
+            const releaseTag = process.env.PUBLIC_CACHE_TAG || 'exported-ccaches';
+            const [owner, repo] = repoName.split('/');
+            const deviceName = process.env.KERNEL_VERSION;
+            const cacheVariant = process.env.CACHE_VARIANT || '';
+            let selected = null;
+
+            const escape_regex = (value) => value.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+            // 优先精确匹配带变体的资产，其次匹配不带变体的
+            const variantExactName = `ccache-${deviceName}${cacheVariant}.tar.zst`;
+            const plainExactName = `ccache-${deviceName}.tar.zst`;
+            // 有变体时仅匹配变体缓存，不降级到非变体（不同变体的缓存无法互相命中）
+            const priorityAssets = cacheVariant ? [variantExactName] : [plainExactName];
+            const legacyAssetPattern = new RegExp(`^ccache-(.+-)?${escape_regex(deviceName)}(-[0-9]+)?\\.tar\\.zst$`);
+
+            core.info(`当前仓库无匹配 ccache，开始按机型查找公共缓存：${deviceName}`);
+            core.info(`缓存变体：${cacheVariant || '(无)'}`);
+            core.info(`缓存来源仓库：${owner}/${repo}`);
+            core.info(`缓存来源标签：${releaseTag}`);
+            core.info(`优先匹配公共缓存文件：${priorityAssets.join(', ')}`);
+
+            let release;
+            try {
+              const response = await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag: releaseTag,
+              });
+              release = response.data;
+            } catch (error) {
+              core.info(`未找到公共缓存 release: ${releaseTag}`);
+              return;
+            }
+
+            for (const asset of release.assets || []) {
+              const priorityIndex = priorityAssets.indexOf(asset.name);
+              const isExactMatch = priorityIndex !== -1;
+              const isLegacyMatch = legacyAssetPattern.test(asset.name);
+              if (isExactMatch || isLegacyMatch) {
+                const shouldReplace =
+                  !selected ||
+                  (isExactMatch && (!selected.exact || priorityIndex < (selected.priority ?? 99))) ||
+                  (isExactMatch && !selected.exact) ||
+                  (!isExactMatch && !selected.exact && new Date(asset.updated_at) > new Date(selected.updated_at));
+
+                if (shouldReplace) {
+                  selected = {
+                    name: asset.name,
+                    updated_at: asset.updated_at,
+                    tag: release.tag_name,
+                    repo: `${owner}/${repo}`,
+                    exact: isExactMatch,
+                    priority: isExactMatch ? priorityIndex : 99,
+                  };
+                }
+              }
+            }
+
+            if (!selected) {
+              core.info('未找到可用的公共 ccache 资产，将使用空缓存继续构建');
+              return;
+            }
+
+            core.info(`找到公共缓存：${selected.name} (${selected.repo}@${selected.tag})`);
+            core.setOutput('asset-name', selected.name);
+            core.setOutput('release-tag', selected.tag);
+            core.setOutput('source-repo', selected.repo);
+
+      - name: 📦 Restore public ccache from releases (恢复公共缓存)
+        if: ${{ steps.ccache-restore.outputs.cache-matched-key == '' && steps.public-ccache.outputs.asset-name != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_CACHE_REPO: ${{ steps.public-ccache.outputs.source-repo }}
+          PUBLIC_CACHE_TAG: ${{ steps.public-ccache.outputs.release-tag }}
+          PUBLIC_CACHE_ASSET: ${{ steps.public-ccache.outputs.asset-name }}
+        run: |
+          set -euo pipefail
+          echo "当前仓库无匹配缓存，开始下载公共缓存：$PUBLIC_CACHE_ASSET"
+          rm -f "$PUBLIC_CACHE_ASSET"
+          rm -rf "$CCACHE_DIR"
+          gh release download "$PUBLIC_CACHE_TAG" --repo "$PUBLIC_CACHE_REPO" --pattern "$PUBLIC_CACHE_ASSET" --dir .
+          TEMP_EXTRACT_DIR="$(mktemp -d)"
+          tar --use-compress-program=unzstd -xf "$PUBLIC_CACHE_ASSET" -C "$TEMP_EXTRACT_DIR"
+          EXTRACTED_CCACHE_DIR="$(find "$TEMP_EXTRACT_DIR" -maxdepth 1 -mindepth 1 -type d -name '.ccache_*' | head -n 1)"
+          if [ -z "$EXTRACTED_CCACHE_DIR" ]; then
+            echo "::error::公共缓存解压后未找到 .ccache_* 目录"
+            exit 1
+          fi
+
+          mkdir -p "$CCACHE_DIR"
+          shopt -s dotglob nullglob
+          mv "$EXTRACTED_CCACHE_DIR"/* "$CCACHE_DIR"/
+          shopt -u dotglob nullglob
+          rm -rf "$TEMP_EXTRACT_DIR"
+          test -d "$CCACHE_DIR"
+          ls -lah "$CCACHE_DIR" | head -n 20
+          echo "PUBLIC_CCACHE_USED=true" >> "$GITHUB_ENV"
+          echo "公共缓存恢复完成：$CCACHE_DIR"
+      
+      - name: 📥 Init ccache (初始化配置ccache)
+        run: |
+          # 设置ccache环境变量
+          export CCACHE_COMPILERCHECK="none"
+          export CCACHE_BASEDIR="${{ github.workspace }}"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_NOHARDLINK="true"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CCACHE_MAXSIZE="${{ env.CCACHE_MAXSIZE }}"
+          
+          # 确保ccache目录存在
+          mkdir -p "$CCACHE_DIR"
+          
+          # 每次运行都重新配置缓存大小
+          echo "配置ccache缓存大小为: $CCACHE_MAXSIZE"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -o compression=true
+          
+          # 显示初始缓存状态
+          echo "ccache初始状态:"
+          ccache -s
+          
+          # 如果缓存恢复命中，显示详细信息
+          if [ -n "${{ steps.ccache-restore.outputs.cache-matched-key }}" ]; then
+            echo "ccache缓存命中详情: ${{ steps.ccache-restore.outputs.cache-matched-key }}"
+            ccache -sv
+          elif [ "${PUBLIC_CCACHE_USED:-false}" = 'true' ]; then
+            echo "已恢复公共 ccache，当前缓存详情:"
+            ccache -sv
+          else
+            echo "未命中仓库缓存，也未找到公共缓存，将从空缓存开始构建"
+          fi
+
+      - name: 🔧 Add Re-Kernel Support (添加 Re-Kernel 支持)
+        if: ${{ env.ENABLE_REKERNEL == 'true' }}
+        run: |
+            cd kernel_workspace
+            VERSION=$(awk -F'=' '/^VERSION[ \t]*=/ {gsub(/ /,"",$2); print $2}' common/Makefile)
+            PATCHLEVEL=$(awk -F'=' '/^PATCHLEVEL[ \t]*=/ {gsub(/ /,"",$2); print $2}' common/Makefile)
+            echo "内核版本: ${VERSION}.${PATCHLEVEL}"
+            [ ! -d "Re-Kernel" ] && git clone --depth 1 https://github.com/Sakion-Team/Re-Kernel.git
+            RE_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Re-Kernel/LKM-Source"
+            cd common
+            grep -q 'source "drivers/rekernel/Kconfig"' drivers/Kconfig || \
+              sed -i '/endmenu/i source "drivers/rekernel/Kconfig"' drivers/Kconfig
+            grep -q 'obj-$(CONFIG_REKERNEL)' drivers/Makefile || \
+              printf '\n# Re-Kernel\nobj-$(CONFIG_REKERNEL) += rekernel/\n' >> drivers/Makefile
+            mkdir -p drivers/rekernel
+            cp ${RE_DIR}/* drivers/rekernel/
+            TARGET="KERNEL_${VERSION}_${PATCHLEVEL}"
+            if grep -q "$TARGET" drivers/rekernel/rekernel.h; then
+              sed -i "s|^[[:space:]]*//[[:space:]]*#define[[:space:]]\+$TARGET|#define $TARGET|" drivers/rekernel/rekernel.h
+              echo "CONFIG_REKERNEL=m" >> arch/arm64/configs/gki_defconfig
+              echo "CONFIG_REKERNEL_NETWORK=y" >> arch/arm64/configs/gki_defconfig
+              echo "✅ Re-Kernel 配置完成"
+            else
+              echo "⚠️ 不支持的内核版本: $TARGET"
+            fi
+
+      - name: 🔧 Add adios_ioscheduler (添加 adios_ioscheduler)
+        working-directory: kernel_workspace/common
+        run: |
+          echo "开始添加 ADIOS I/O 调度器支持..."
+          PATCH_FILE="${GITHUB_WORKSPACE}/patch/adios_ioscheduler.patch"
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::未找到 ADIOS I/O 调度器补丁文件"
+            exit 1
+          fi
+          if [ -f "block/adios.c" ]; then
+            echo "✓ ADIOS I/O 调度器文件已存在，跳过应用补丁"
+          else
+            cp "$PATCH_FILE" ./adios_ioscheduler.patch
+            echo "正在应用 ADIOS I/O 调度器补丁..."
+            if patch -p1 --ignore-whitespace -F 3 < adios_ioscheduler.patch 2>&1 | tee /tmp/adios_patch.log; then
+              echo "✓ ADIOS I/O 调度器补丁应用成功"
+            else
+              echo "::warning::ADIOS 补丁应用出现问题"
+              if grep -q "malformed patch" /tmp/adios_patch.log; then
+                patch -p1 --force --ignore-whitespace < adios_ioscheduler.patch || true
+              fi
+            fi
+            rm -f adios_ioscheduler.patch
+          fi
+          if ! grep -q "CONFIG_MQ_IOSCHED_ADIOS" arch/arm64/configs/gki_defconfig; then
+            echo "CONFIG_MQ_IOSCHED_ADIOS=y" >> arch/arm64/configs/gki_defconfig
+            echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> arch/arm64/configs/gki_defconfig
+            echo "✓ 已启用 ADIOS I/O 调度器支持"
+          fi
+          echo "✓ ADIOS I/O 调度器支持配置完成"
+          
+      - name: ⚙️ apply lz4 lz4 1.10.0 & zstd 1.5.7 Patch (应用lz4 1.10.0 & zstd 1.5.7补丁)
+        run: |
+          echo "正在添加lz4 1.10.0 & zstd 1.5.7补丁…"
+          cd kernel_workspace
+          git clone https://github.com/cctv18/oppo_oplus_realme_sm8750.git
+          cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4.patch ./common/
+          cp ./oppo_oplus_realme_sm8750/zram_patch/lz4armv8.S ./common/lib
+          cp ./oppo_oplus_realme_sm8750/zram_patch/002-zstd.patch ./common/
+          cd ./common
+          git apply -p1 < 001-lz4.patch || true
+          patch -p1 < 002-zstd.patch || true
+
+      - name: Apply Unicode bypass patch (Unicode 零宽绕过)
+        run: |
+          cd kernel_workspace/common
+          wget -q "https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/unicode_bypass_fix_6.1+.patch"
+          patch -p1 < "unicode_bypass_fix_6.1+.patch" || git apply -p1 < "unicode_bypass_fix_6.1+.patch" || echo "unicode patch skipped"
+          
+      - name: 🛠 Set Baseband-guard (配置BBG基带守护)
+        if: ${{ env.ENABLE_BBG == 'true' }}
+        run: |
+          echo "正在启用启用内核级基带保护支持…"
+          cd kernel_workspace
+          wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+          echo "CONFIG_BBG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/lockdown/lockdown,baseband_guard/ } }' ./common/security/Kconfig
+
+      
+      - name: ⚙️ Set BakaSU (设置BakaSU)
+        run: |
+          cd kernel_workspace
+          echo "正在配置BakaSU..."
+          curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/refs/heads/main/kernel/setup.sh" | bash -s main
+          cd ./KernelSU 
+          KSU_VERSION=$(expr $(git rev-list --count origin/main 2>/dev/null) + 30700 2>/dev/null || echo 114514)
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+
+      - name: 🔧 Set up SUSFS (配置 SUSFS)
+        if: ${{ env.ENABLE_SUSFS == 'true' }}
+        run: |
+          cd kernel_workspace
+          git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-android15-6.6
+          wget https://raw.githubusercontent.com/cctv18/oppo_oplus_realme_sm8750/main/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
+          cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch ./common/
+          cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
+          cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+          cd ./common
+          patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch || true
+          patch -p1 -N -F 3 < 69_hide_stuff.patch || true
+          case "${{ env.KERNEL_VERSION }}" in
+            6.6.56)
+              echo "[INFO] 当前构建内核版本为6.6.56，正在修复 undeclared identifier 'vma' 编译错误"
+              cd ./fs/proc
+              sed -i 's/vma = find_vma(mm, start_vaddr);/struct vm_area_struct *vma = find_vma(mm, start_vaddr);/' task_mmu.c
+              ;;
+          esac
+
+      - name: 🔧 Clone Droidspaces Patches (克隆 Droidspaces 补丁仓库)
+        if: ${{ env.ENABLE_DROIDSPACES != 'off' }}
+        run: |
+          git clone --depth 1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
+          echo "DROIDSPACES_PATCHES=/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI" >> $GITHUB_ENV
+
+      - name: 🔧 Apply Droidspaces SYSVIPC kABI fix (集成 Droidspaces 支持)
+        if: ${{ env.ENABLE_DROIDSPACES != 'off' }}
+        working-directory: kernel_workspace/common
+        run: |
+          KERNEL_VER="6.6"
+          SLOT="${{ env.ENABLE_DROIDSPACES }}"
+
+          # 678 -> 6_7_8, 123 -> 1_2_3, 345 -> 3_4_5
+          SLOT_NAME=$(echo "$SLOT" | sed 's/\(.\)/\1_/g; s/_$//')
+          echo "应用 Droidspaces SYSVIPC kABI 修复补丁 (槽位: $SLOT / $SLOT_NAME)..."
+
+          PATCH_FILE="$DROIDSPACES_PATCHES/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_${SLOT_NAME}.patch"
+
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::未找到 Droidspaces SYSVIPC kABI 补丁: $PATCH_FILE"
+            exit 1
+          fi
+
+          if ! patch -p1 --forward < "$PATCH_FILE"; then
+            echo "::warning::SYSVIPC kABI 补丁应用失败，可能已应用或上下文不匹配"
+          fi
+
+          echo "✅ Droidspaces SYSVIPC kABI 修复完成"
+
+      - name: 🔧 Apply NTSync Patch (注入 NTSync 内核配置)
+        if: ${{ env.ENABLE_DROIDSPACES != 'off' && env.ENABLE_DROIDSPACES_NTSYNC == 'true' }}
+        working-directory: kernel_workspace/common
+        run: |
+          set -e
+          echo "=== 开始注入 NTSync 内核补丁 ==="
+          echo "Kernel 版本: 6.6"
+
+          NTSYNC_PATCH="ntsync_compat_android15-6.6"
+
+          echo "自动选择 NTSync 补丁: ${NTSYNC_PATCH}.patch"
+          wget -q "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/ntsync_base.patch"
+          wget -q "https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/${NTSYNC_PATCH}.patch"
+
+          patch -p1 < "ntsync_base.patch"
+          patch -p1 < "${NTSYNC_PATCH}.patch"
+
+          echo "✅ NTSync 补丁应用完成"
+
+      - name: 🔧 Set gki_defconfig (设置编译配置)
+        run: |
+          cd kernel_workspace
+          DEFCONFIG="./common/arch/arm64/configs/gki_defconfig"
+
+          # ==================== Droidspaces 内核配置 ====================
+          if [ "${{ env.ENABLE_DROIDSPACES }}" != "off" ]; then
+            echo "==> 开始配置 Droidspaces 内核选项..."
+
+            enable_config() {
+              local cfg="$1"
+              if grep -q "^${cfg}=y" "$DEFCONFIG"; then
+                echo "  已启用: $cfg"
+              elif grep -q "^# ${cfg} is not set" "$DEFCONFIG"; then
+                sed -i "s/^# ${cfg} is not set$/${cfg}=y/" "$DEFCONFIG"
+                echo "  已切换: $cfg"
+              else
+                echo "${cfg}=y" >> "$DEFCONFIG"
+                echo "  已添加: $cfg"
+              fi
+            }
+
+            config_defined() {
+              local name="${1#CONFIG_}"
+              grep -RqsE --include='Kconfig*' "^[[:space:]]*(menuconfig|config)[[:space:]]+${name}$" .
+            }
+
+            enable_config_if_defined() {
+              local cfg="$1"
+              if config_defined "$cfg"; then
+                enable_config "$cfg"
+              else
+                echo "  当前内核未定义: $cfg，跳过"
+              fi
+            }
+
+            disable_config() {
+              local cfg="$1"
+              if grep -q "^${cfg}=n" "$DEFCONFIG"; then
+                echo "  已禁用: $cfg"
+              elif grep -q "^${cfg}=y" "$DEFCONFIG"; then
+                sed -i "s/^${cfg}=y$/${cfg}=n/" "$DEFCONFIG"
+                echo "  已关闭: $cfg"
+              else
+                echo "# ${cfg} is not set" >> "$DEFCONFIG"
+                echo "  已添加并禁用: $cfg"
+              fi
+            }
+
+            # ---- 必要配置 (Droidspaces 容器必须) ----
+            enable_config CONFIG_SYSVIPC
+            enable_config CONFIG_POSIX_MQUEUE
+            enable_config CONFIG_IPC_NS
+            enable_config CONFIG_PID_NS
+            enable_config CONFIG_DEVTMPFS
+
+            # ---- 网络相关配置 (Docker/NAT 模式) ----
+            enable_config_if_defined CONFIG_NETFILTER_XT_MATCH_ADDRTYPE
+            enable_config_if_defined CONFIG_NETFILTER_XT_TARGET_LOG
+            enable_config_if_defined CONFIG_NETFILTER_XT_MATCH_RECENT
+            enable_config_if_defined CONFIG_IP_SET
+            enable_config_if_defined CONFIG_IP_SET_HASH_IP
+            enable_config_if_defined CONFIG_IP_SET_HASH_NET
+            enable_config_if_defined CONFIG_NETFILTER_XT_SET
+            enable_config_if_defined CONFIG_NETFILTER_XT_TARGET_REJECT
+            enable_config_if_defined CONFIG_IP_NF_TARGET_REJECT
+
+            # ---- 关闭安卓严格网络控制（GKI 6.6 专用，容器内普通用户联网必需） ----
+            disable_config CONFIG_ANDROID_PARANOID_NETWORK
+
+            echo "==> Droidspaces 内核配置完成"
+          fi
+
+          # ==================== NTSync 配置 ====================
+          if [ "${{ env.ENABLE_DROIDSPACES }}" != "off" ] && [ "${{ env.ENABLE_DROIDSPACES_NTSYNC }}" = "true" ]; then
+            echo "==> 正在启用 CONFIG_NTSYNC..."
+            sed -i '/CONFIG_NTSYNC is not set/d' "$DEFCONFIG"
+            if ! grep -q "^CONFIG_NTSYNC=y" "$DEFCONFIG"; then
+              echo "CONFIG_NTSYNC=y" >> "$DEFCONFIG"
+              echo "✅ 已成功启用 CONFIG_NTSYNC"
+            else
+              echo "✅ CONFIG_NTSYNC 已处于启用状态"
+            fi
+          fi
+
+          # ==================== KSU 配置 ====================
+          echo "CONFIG_KSU=y" >> "$DEFCONFIG"
+
+          echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%-Re-TG@qdykernel"' >> "$DEFCONFIG"
+
+          # ==================== SUSFS 配置 ====================
+          if [ "${{ env.ENABLE_SUSFS }}" == 'true' ];then
+            echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$DEFCONFIG"
+            echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> "$DEFCONFIG"
+          else
+            echo "未启用SUSFS 跳过SUSFS配置"
+          fi
+
+          echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+          echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+          #Remove check_defconfig
+          sudo sed -i 's/check_defconfig//' ./common/build.config.gki
+
+      - name: 🔧 Set Kernel name (写入内核名称)
+        run: |
+          cd kernel_workspace
+          echo "自定义后缀: $DEFAULT_SUFFIX"
+          ESCAPED_SUFFIX=$(printf '%s\n' "$DEFAULT_SUFFIX" | sed 's:[\/&]:\\&:g')
+          sudo sed -i "s/-4k/$ESCAPED_SUFFIX/g" ./common/arch/arm64/configs/gki_defconfig
+          sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
+
+      - name: 📥 Start build timer (构建计时开始)
+        run: 
+          echo "BUILD_START=$(date +%s)" >> $GITHUB_ENV
+
+      - name: 🔨 Build Kernel (构建内核)
+        run: |
+          WORKDIR="$(pwd)"
+          export PATH="/usr/lib/ccache:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/clang18/bin:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/build-tools/bin:$PATH"
+          CLANG_DIR="$WORKDIR/kernel_workspace/clang18/bin"
+          CLANG_VERSION="$($CLANG_DIR/clang --version | head -n 1)"
+          LLD_VERSION="$($CLANG_DIR/ld.lld --version | head -n 1)"
+          echo "编译器信息:"
+          echo "Clang版本: $CLANG_VERSION"
+          echo "LLD版本: $LLD_VERSION"
+          pahole_version=$(pahole --version 2>/dev/null | head -n1); [ -z "$pahole_version" ] && echo "pahole版本：未安装" || echo "pahole版本：$pahole_version"
+          
+          export CCACHE_LOGFILE="${{ github.workspace }}/kernel_workspace/ccache.log"
+          export CCACHE_COMPILERCHECK="none"
+          export CCACHE_BASEDIR="${{ github.workspace }}"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_NOHARDLINK="true"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CCACHE_MAXSIZE="3G"
+          export CCACHE_IS_KERNEL_COMPILING="true"
+          echo "sloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros" >> "$CCACHE_DIR/ccache.conf"
+          
+          cd kernel_workspace/common
+          wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/lib/libfakestat.so
+          wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/lib/libfaketimeMT.so
+          chmod 777 ./*.so
+          export FAKESTAT="2025-05-25 12:00:00"
+          export FAKETIME="@2025-05-25 13:00:00"
+          echo "FAKESTAT=$FAKESTAT" >> $GITHUB_ENV
+          echo "FAKETIME=$FAKETIME" >> $GITHUB_ENV
+          SO_DIR=$(pwd)
+          export PRELOAD_LIBS="$SO_DIR/libfakestat.so $SO_DIR/libfaketimeMT.so"
+          #创建 CC (编译器) 包装器
+          echo '#!/bin/bash' > cc-wrapper
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> cc-wrapper
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> cc-wrapper
+          echo 'export FAKETIME="'$FAKETIME'"' >> cc-wrapper
+          echo 'ccache clang "$@"' >> cc-wrapper
+          #创建 LD (链接器) 包装器
+          echo '#!/bin/bash' > ld-wrapper
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> ld-wrapper
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> ld-wrapper
+          echo 'export FAKETIME="'$FAKETIME'"' >> ld-wrapper
+          echo 'ld.lld "$@"' >> ld-wrapper
+          
+          # 测试时间劫持测试是否正常工作
+          echo "--- [Wrapper Test] 正在创建通用的时间劫持测试脚本 ---"
+          echo '#!/bin/bash' > test-wrapper.sh
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> test-wrapper.sh
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> test-wrapper.sh
+          echo 'export FAKETIME="'$FAKETIME'"' >> test-wrapper.sh
+          echo 'echo ">>> Wrapper 内部环境检查完毕."' >> test-wrapper.sh
+          echo 'exec "$@"' >> test-wrapper.sh # 执行所有传入的参数
+          chmod +x test-wrapper.sh
+          echo "--- [Wrapper Test] 正在测试 (date) 命令 ---"
+          ./test-wrapper.sh date
+          echo "--- [Wrapper Test] 正在测试 (stat) 命令 ---"
+          ./test-wrapper.sh stat ./Makefile
+          echo "--- [Wrapper Test] 测试完毕 ---"
+          chmod +x cc-wrapper ld-wrapper
+          echo "--- 编译前环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
+          echo "--- 编译前环境文件时间戳: ---"
+          LD_PRELOAD=$PRELOAD_LIBS stat ./Makefile
+
+          export KBUILD_BUILD_TIMESTAMP="${KERNEL_TIME}"
+          
+          #在构建内核的同时清除不必要的.NET, Android NDK, Haskell, CodeQL运行库，清理空间且不阻塞后续步骤运行
+          sudo rm -rf /usr/share/dotnet &
+          sudo rm -rf /usr/local/lib/android &
+          sudo rm -rf /opt/ghc &
+          sudo rm -rf /opt/hostedtoolcache/CodeQL &
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+          
+          # 编译后时间劫持二次校验
+          echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
+          echo "--- 编译后环境文件时间戳: ---"
+          LD_PRELOAD=$PRELOAD_LIBS stat ./Makefile
+          echo "内核编译完成！"
+          echo "ccache状态："
+          ccache -s
+          echo "编译后空间:"
+          df -h
+
+      - name: 🕒 Calculate build time (计算构建时间)
+        run: |
+          END=$(date +%s)
+          TIME=$((END - BUILD_START))
+          echo "BUILD_TIME=$TIME" >> $GITHUB_ENV
+          echo "Build time: $TIME seconds"
+
+      - name: 📥 Save ccache if needed (构建时间较长或首次落地本地缓存时保存)
+        if: ${{ env.BUILD_TIME > 480 || steps.ccache-restore.outputs.cache-matched-key == '' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.KERNEL_VERSION }}${{ env.CACHE_VARIANT }}-${{ github.run_id }}
+
+      - name: 🧹 Clean old ccache (清理旧缓存)
+        if: env.BUILD_TIME > 480
+        uses: actions/github-script@v9
+        env:
+          PREFIX: ccache-${{ env.KERNEL_VERSION }}${{ env.CACHE_VARIANT }}-
+          CURRENT_KEY: ccache-${{ env.KERNEL_VERSION }}${{ env.CACHE_VARIANT }}-${{ github.run_id }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const prefix = process.env.PREFIX;
+            const currentKey = process.env.CURRENT_KEY;
+            let page = 1;
+            let deleted = 0;
+
+            core.info('构建时间超过8分钟，已保存ccache缓存');
+            core.info(`正在清理旧缓存，匹配前缀: ${prefix}`);
+
+            while (true) {
+              const response = await github.rest.actions.getActionsCacheList({
+                owner,
+                repo,
+                per_page: 100,
+                page,
+              });
+
+              const caches = response.data.actions_caches || [];
+              if (caches.length === 0) {
+                break;
+              }
+
+              for (const cache of caches) {
+                if (cache.key.startsWith(prefix) && cache.key !== currentKey) {
+                  core.info(`Deleting cache: ${cache.key} (ID: ${cache.id})`);
+                  await github.rest.actions.deleteActionsCacheById({
+                    owner,
+                    repo,
+                    cache_id: cache.id,
+                  });
+                  deleted++;
+                }
+              }
+
+              if (caches.length < 100) {
+                break;
+              }
+              page++;
+            }
+
+            core.info(`旧缓存清理完成，共删除 ${deleted} 个缓存`);
+
+      - name: 📦 ReName Image  (修改镜像名)
+        run: |
+          cd kernel_workspace/common/out/arch/arm64/boot
+          cp ./Image "./kernel"
+
+      - name: 📤 Upload Image (上传 Image)
+        uses: actions/upload-artifact@v5
+        with:
+         name: kernel_image_${{ env.KERNEL_VERSION }}
+         path: kernel_workspace/common/out/arch/arm64/boot/kernel
+         
+      - name: 📦 Sign boot using AOSP test key (使用AOSP测试密钥签名boot)
+        if: ${{ env.ENABLE_SIGNED == 'true' }}
+        run: |
+          cd kernel_workspace
+          aria2c -s16 -x16 -k1M "https://github.com/showdo/AOSP-Testkey-BootSigner/archive/refs/heads/main.tar.gz" -o boot_avb_tool.tar.gz && \
+          mkdir -p boot_avb_tool && \
+          tar -xzf boot_avb_tool.tar.gz -C boot_avb_tool && \
+          rm -f boot_avb_tool.tar.gz && \
+          cp ./common/out/arch/arm64/boot/Image ./boot_avb_tool/AOSP-Testkey-BootSigner-main/kernel
+          cd boot_avb_tool/AOSP-Testkey-BootSigner-main && \
+          curl -L -o boot.img https://github.com/showdo/AOSP-Testkey-BootSigner/releases/download/${{ env.releases }}/boot.img
+          chmod +x ./tools/magiskboot
+          ./tools/magiskboot repack boot.img
+          rm -f ./boot.img kernel
+          mv ./new-boot.img ./boot.img
+          python3 rebuild_avb.py --chained-mode
+
+      - name: 📤 Upload Signed boot (上传已签名的 boot)
+        if: ${{ env.ENABLE_SIGNED == 'true' }}
+        uses: actions/upload-artifact@v5
+        with:
+         name: Boot_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_BakaSU_AOSP_Signed
+         path: kernel_workspace/boot_avb_tool/AOSP-Testkey-BootSigner-main/boot.img
+
+  upload_rekernel:
+    name: Upload Re-Kernel Module
+    if: ${{ github.event.inputs.enable_ReKernel == 'true' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 🔎 Find Re-Kernel module zip (查找Re-Kernel最新模块并下载)
+        id: download-rekernel
+        uses: actions/github-script@v9
+        env:
+          KERNEL_MAJOR: "6.6"
+        with:
+          script: |
+            const owner = 'Sakion-Team';
+            const repo = 'Re-Kernel';
+            const kernelMajor = process.env.KERNEL_MAJOR;
+
+            core.info(`正在获取 ${owner}/${repo} 的最新 release...`);
+
+            const release = await github.rest.repos.getLatestRelease({
+              owner,
+              repo,
+            });
+            core.info(`最新版本: ${release.data.tag_name}`);
+            const escapedKernel = kernelMajor.replace(/\./g, '\\.');
+            const pattern66 = new RegExp(`^Re-Kernel-v([\\d.]+)-${escapedKernel}\\.zip$`);
+            const patternAny = new RegExp(`^Re-Kernel.*\\.zip$`, 'i');
+
+            let targetAsset = null;
+            let versionNumber = '';
+            let isExactMatch = false;
+
+            for (const asset of release.data.assets || []) {
+              const match = asset.name.match(pattern66);
+              if (match) {
+                targetAsset = asset;
+                versionNumber = match[1];
+                isExactMatch = true;
+                core.info(`找到精确匹配 6.6: ${asset.name}`);
+                break;
+              }
+            }
+
+            if (!targetAsset) {
+              core.info('未找到6.6版本，查找任意Re-Kernel模块...');
+              for (const asset of release.data.assets || []) {
+                const match = asset.name.match(patternAny);
+                if (match) {
+                  targetAsset = asset;
+                  versionNumber = asset.name.replace(/Re-Kernel-v|.zip/gi, '').replace(/^-/, '').replace(/-$/, '') || 'latest';
+                  isExactMatch = false;
+                  core.info(`找到Re-Kernel模块: ${asset.name}`);
+                  break;
+                }
+              }
+            }
+
+            if (!targetAsset) {
+              core.setFailed('未找到任何 Re-Kernel 模块资产');
+              return;
+            }
+
+            core.info(`找到目标资产: ${targetAsset.name} (版本: ${versionNumber}, ${(targetAsset.size / 1024).toFixed(1)} KB)`);
+            core.setOutput('asset-name', targetAsset.name);
+            core.setOutput('download-url', targetAsset.browser_download_url);
+            core.setOutput('version-number', versionNumber);
+
+      - name: 📥 Download Re-Kernel module (下载 Re-Kernel 模块)
+        env:
+          ASSET_NAME: ${{ steps.download-rekernel.outputs.asset-name }}
+          DOWNLOAD_URL: ${{ steps.download-rekernel.outputs.download-url }}
+          VERSION_NUMBER: ${{ steps.download-rekernel.outputs.version-number }}
+        run: |
+          set -euo pipefail
+          ARTIFACT_NAME="Re-Kernel-v${VERSION_NUMBER}"
+          echo "正在下载 Re-Kernel 模块: $ASSET_NAME"
+          echo "下载地址: $DOWNLOAD_URL"
+          echo "Artifact 名称: $ARTIFACT_NAME"
+          aria2c -s16 -x16 -k1M "$DOWNLOAD_URL" -o "$ASSET_NAME"
+          echo "✓ Re-Kernel 模块下载完成"
+          ls -lh "$ASSET_NAME"
+          echo "正在创建目录 $ARTIFACT_NAME 并解压模块..."
+          mkdir -p "$ARTIFACT_NAME"
+          unzip -q "$ASSET_NAME" -d "$ARTIFACT_NAME"
+          echo "✓ 目录结构:"
+          ls -lR "$ARTIFACT_NAME"
+
+      - name: 📤 Upload Re-Kernel module (上传 Re-Kernel 模块)
+        uses: actions/upload-artifact@v5
+        with:
+          name: Re-Kernel-v${{ steps.download-rekernel.outputs.version-number }}
+          path: Re-Kernel-v${{ steps.download-rekernel.outputs.version-number }}
